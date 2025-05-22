@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="initial-scale=1,user-scalable=no,maximum-scale=1,width=device-width">
+        <meta name="mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <link rel="stylesheet" href="css/leaflet.css">
+        <link rel="stylesheet" href="css/L.Control.Layers.Tree.css">
+        <link rel="stylesheet" href="css/L.Control.Locate.min.css">
+        <link rel="stylesheet" href="css/qgis2web.css">
+        <link rel="stylesheet" href="css/fontawesome-all.min.css">
+        <link rel="stylesheet" href="css/MarkerCluster.css">
+        <link rel="stylesheet" href="css/MarkerCluster.Default.css">
+        <link rel="stylesheet" href="css/leaflet-search.css">
+        <link rel="stylesheet" href="css/leaflet-measure.css">
+        <style>
+        html, body, #map {
+            width: 100%;
+            height: 100%;
+            padding: 0;
+            margin: 0;
+        }
+        .piechart-overlay {
+            position: absolute;
+            left: 60px;
+            top: 22%;
+            transform: translateY(-50%);
+            z-index: 2001;
+            background: rgba(255,255,255,0.85);
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            padding: 6px;
+            width: 240px;
+            height: 240px;
+            /* REMOVE display: flex; */
+            align-items: center;
+            justify-content: center;
+        }
+        .barchart-overlay {
+            /* If you have a .barchart-overlay CSS block, REMOVE display: flex; from it too */
+                        position: absolute;
+            left: 22px;
+            top: 70%;
+            transform: translateY(-50%);
+            z-index: 2001;
+            background: rgba(255,255,255,0.85);
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            padding: 6px;
+            width: 400px;
+            height: 300px;
+            align-items: center;
+            justify-content: center;
+        }
+        </style>
+        <title></title>
+    </head>
+    <body>
+  
+ <!-- Pie Chart Overlay (closed by default) -->
+        <div class="piechart-overlay" id="piechartOverlay" style="display:none; ...;">
+            <button id="togglePieChart" style="position:absolute;top:5px;right:5px;z-index:10;">×</button>
+            <canvas id="countryPieChart" width="400" height="400"></canvas>
+        </div>
+        <button id="showPieChart" style="position:absolute;left:10px;top:38%;transform:translateY(-50%);z-index:2002;display:block;">Show Pie Chart</button>
+
+        <!-- Bar Chart Overlay (closed by default) -->
+        <div class="barchart-overlay" id="barchartOverlay" style="display:none; ...;">
+            <button id="toggleBarChart" style="position:absolute;top:5px;right:5px;z-index:10;">×</button>
+            <canvas id="countryBarChart" width="400" height="300"></canvas>
+        </div>
+        <button id="showBarChart" style="position:absolute;left:10px;top:42%;transform:translateY(-50%);z-index:2002;display:block;">Show Bar Chart</button>
+        
+        <div id="map">
+        </div>
+        <script src="js/qgis2web_expressions.js"></script>
+        <script src="js/leaflet.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-pattern/dist/chartjs-plugin-pattern.min.js"></script>
+        <script src="js/L.Control.Layers.Tree.min.js"></script>
+        <script src="js/L.Control.Locate.min.js"></script>
+        <script src="js/leaflet.rotatedMarker.js"></script>
+        <script src="js/leaflet.pattern.js"></script>
+        <script src="js/leaflet-hash.js"></script>
+        <script src="js/Autolinker.min.js"></script>
+        <script src="js/rbush.min.js"></script>
+        <script src="js/labelgun.min.js"></script>
+        <script src="js/labels.js"></script>
+        <script src="js/leaflet-measure.js"></script>
+        <script src="js/leaflet.markercluster.js"></script>
+        <script src="js/leaflet-search.js"></script>
+        <script src="data/AmentumOfficeLocations_1.js"></script>
+        <div style="position: fixed; bottom: 10px; left: 10px; z-index: 2000;">
+            <img src="Amentum_Logo-RGB-Full_Color_H.png" alt="Company Logo" width="100">
+        </div>
+        <script>
+        var highlightLayer;
+        function highlightFeature(e) {
+            highlightLayer = e.target;
+
+            if (e.target.feature.geometry.type === 'LineString' || e.target.feature.geometry.type === 'MultiLineString') {
+              highlightLayer.setStyle({
+                color: '#ffff00',
+              });
+            } else {
+              highlightLayer.setStyle({
+                fillColor: '#ffff00',
+                fillOpacity: 1
+              });
+            }
+            highlightLayer.openPopup();
+        }
+        
+
+        var map = L.map('map', {
+            zoomControl:false, maxZoom:28, minZoom:1
+        }).fitBounds([[-71.65635788656941,-123.95192068736182],[164.1836481203366,160.62835322763814]]);
+        var hash = new L.Hash(map);
+        map.attributionControl.setPrefix('<a href="https://github.com/tomchadwin/qgis2web" target="_blank">qgis2web</a> &middot; <a href="https://leafletjs.com" title="A JS library for interactive maps">Leaflet</a> &middot; <a href="https://qgis.org">QGIS</a>');
+        var autolinker = new Autolinker({truncate: {length: 30, location: 'smart'}});
+        // remove popup's row if "visible-with-data"
+        function removeEmptyRowsFromPopupContent(content, feature) {
+         var tempDiv = document.createElement('div');
+         tempDiv.innerHTML = content;
+         var rows = tempDiv.querySelectorAll('tr');
+         for (var i = 0; i < rows.length; i++) {
+             var td = rows[i].querySelector('td.visible-with-data');
+             var key = td ? td.id : '';
+             if (td && td.classList.contains('visible-with-data') && feature.properties[key] == null) {
+                 rows[i].parentNode.removeChild(rows[i]);
+             }
+         }
+         return tempDiv.innerHTML;
+        }
+        // add class to format popup if it contains media
+		function addClassToPopupIfMedia(content, popup) {
+			var tempDiv = document.createElement('div');
+			tempDiv.innerHTML = content;
+			if (tempDiv.querySelector('td img')) {
+				popup._contentNode.classList.add('media');
+					// Delay to force the redraw
+					setTimeout(function() {
+						popup.update();
+					}, 10);
+			} else {
+				popup._contentNode.classList.remove('media');
+			}
+		}
+        var zoomControl = L.control.zoom({
+            position: 'topleft'
+        }).addTo(map);
+        L.control.locate({locateOptions: {maxZoom: 19}}).addTo(map);
+        var measureControl = new L.Control.Measure({
+            position: 'topleft',
+            primaryLengthUnit: 'meters',
+            secondaryLengthUnit: 'kilometers',
+            primaryAreaUnit: 'sqmeters',
+            secondaryAreaUnit: 'hectares'
+        });
+        measureControl.addTo(map);
+        document.getElementsByClassName('leaflet-control-measure-toggle')[0].innerHTML = '';
+        document.getElementsByClassName('leaflet-control-measure-toggle')[0].className += ' fas fa-ruler';
+        var bounds_group = new L.featureGroup([]);
+        function setBounds() {
+        }
+        map.createPane('pane_OpenStreetMap_0');
+        map.getPane('pane_OpenStreetMap_0').style.zIndex = 400;
+        var layer_OpenStreetMap_0 = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            pane: 'pane_OpenStreetMap_0',
+            opacity: 1.0,
+            attribution: '',
+            minZoom: 1,
+            maxZoom: 28,
+            minNativeZoom: 0,
+            maxNativeZoom: 19
+        });
+        layer_OpenStreetMap_0;
+        map.addLayer(layer_OpenStreetMap_0);
+        function pop_AmentumOfficeLocations_1(feature, layer) {
+            layer.on({
+                // mouseout: function(e) {
+                //     for (var i in e.target._eventParents) {
+                //         if (typeof e.target._eventParents[i].resetStyle === 'function') {
+                //             e.target._eventParents[i].resetStyle(e.target);
+                //         }
+                //     }
+                //     if (typeof layer.closePopup == 'function') {
+                //         layer.closePopup();
+                //     } else {
+                //         layer.eachLayer(function(feature){
+                //             feature.closePopup()
+                //         });
+                //     }
+                // },
+                mouseover: highlightFeature,
+            });
+            var popupContent = '<table>\
+                    <tr>\
+                        <td class="visible-with-data" id="Office Name" colspan="2"><strong>Office Name</strong><br />' + (feature.properties['Office Name'] !== null ? autolinker.link(String(feature.properties['Office Name']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <td class="visible-with-data" id="Country" colspan="2"><strong>Country</strong><br />' + (feature.properties['Country'] !== null ? autolinker.link(String(feature.properties['Country']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <td class="visible-with-data" id="Office Address" colspan="2"><strong>Office Address</strong><br />' + (feature.properties['Office Address'] !== null ? autolinker.link(String(feature.properties['Office Address']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <td class="visible-with-data" id="Post/ZIP Code" colspan="2"><strong>Post/ZIP Code</strong><br />' + (feature.properties['Post/ZIP Code'] !== null ? autolinker.link(String(feature.properties['Post/ZIP Code']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <td class="visible-with-data" id="Latitude" colspan="2"><strong>Latitude</strong><br />' + (feature.properties['Latitude'] !== null ? autolinker.link(String(feature.properties['Latitude']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <td class="visible-with-data" id="Longitude" colspan="2"><strong>Longitude</strong><br />' + (feature.properties['Longitude'] !== null ? autolinker.link(String(feature.properties['Longitude']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
+                    </tr>\
+                </table>';
+            var content = removeEmptyRowsFromPopupContent(popupContent, feature);
+			layer.on('popupopen', function(e) {
+				addClassToPopupIfMedia(content, e.popup);
+			});
+			layer.bindPopup(content, { maxHeight: 400 });
+        }
+
+        function style_AmentumOfficeLocations_1_0(feature) {
+            switch(String(feature.properties['Country'])) {
+                case 'Australia':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(71,18,100,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Brazil':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(72,32,114,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Canada':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(70,46,125,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Colombia':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(67,60,132,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Costa Rica':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(63,73,137,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Czech Republic':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(57,85,139,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'France':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(52,97,141,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Germany':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(47,108,142,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'India':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(42,118,142,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Japan':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(39,129,142,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Malaysia':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(34,139,142,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Mexico':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(31,149,139,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Philippines':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(31,160,136,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Poland':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(36,170,131,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Qatar':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(48,180,123,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Saudi Arabia':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(65,190,114,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Singapore':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(87,199,102,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'Slovakia':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(111,207,88,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'South Africa':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(139,213,71,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'United Arab Emirates':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(167,219,52,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'United Kingdom':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(196,224,34,1.0)',
+                interactive: true,
+            }
+                    break;
+                case 'United States':
+                    return {
+                pane: 'pane_AmentumOfficeLocations_1',
+                radius: 8.000000000000004,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(226,228,25,1.0)',
+                interactive: true,
+            }
+                    break;
+            }
+        }
+        map.createPane('pane_AmentumOfficeLocations_1');
+        map.getPane('pane_AmentumOfficeLocations_1').style.zIndex = 401;
+        map.getPane('pane_AmentumOfficeLocations_1').style['mix-blend-mode'] = 'normal';
+        var layer_AmentumOfficeLocations_1 = new L.geoJson(json_AmentumOfficeLocations_1, {
+            attribution: '',
+            interactive: true,
+            dataVar: 'json_AmentumOfficeLocations_1',
+            layerName: 'layer_AmentumOfficeLocations_1',
+            pane: 'pane_AmentumOfficeLocations_1',
+            onEachFeature: pop_AmentumOfficeLocations_1,
+            pointToLayer: function (feature, latlng) {
+                var context = {
+                    feature: feature,
+                    variables: {}
+                };
+                return L.circleMarker(latlng, style_AmentumOfficeLocations_1_0(feature));
+            },
+        });
+        var cluster_AmentumOfficeLocations_1 = new L.MarkerClusterGroup({showCoverageOnHover: false,
+            spiderfyDistanceMultiplier: 2});
+        cluster_AmentumOfficeLocations_1.addLayer(layer_AmentumOfficeLocations_1);
+
+        bounds_group.addLayer(layer_AmentumOfficeLocations_1);
+        cluster_AmentumOfficeLocations_1.addTo(map);
+        var overlaysTree = [
+            {label: 'Amentum Office Locations<br /><table><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Australia0.png" /></td><td>Australia</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Brazil1.png" /></td><td>Brazil</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Canada2.png" /></td><td>Canada</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Colombia3.png" /></td><td>Colombia</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_CostaRica4.png" /></td><td>Costa Rica</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_CzechRepublic5.png" /></td><td>Czech Republic</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_France6.png" /></td><td>France</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Germany7.png" /></td><td>Germany</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_India8.png" /></td><td>India</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Japan9.png" /></td><td>Japan</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Malaysia10.png" /></td><td>Malaysia</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Mexico11.png" /></td><td>Mexico</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Philippines12.png" /></td><td>Philippines</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Poland13.png" /></td><td>Poland</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Qatar14.png" /></td><td>Qatar</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_SaudiArabia15.png" /></td><td>Saudi Arabia</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Singapore16.png" /></td><td>Singapore</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_Slovakia17.png" /></td><td>Slovakia</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_SouthAfrica18.png" /></td><td>South Africa</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_UnitedArabEmirates19.png" /></td><td>United Arab Emirates</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_UnitedKingdom20.png" /></td><td>United Kingdom</td></tr><tr><td style="text-align: center;"><img src="legend/AmentumOfficeLocations_1_UnitedStates21.png" /></td><td>United States</td></tr></table>', layer: cluster_AmentumOfficeLocations_1},
+            {label: "OpenStreetMap", layer: layer_OpenStreetMap_0},]
+        var lay = L.control.layers.tree(null, overlaysTree,{
+            //namedToggle: true,
+            //selectorBack: false,
+            //closedSymbol: '&#8862; &#x1f5c0;',
+            //openedSymbol: '&#8863; &#x1f5c1;',
+            //collapseAll: 'Collapse all',
+            //expandAll: 'Expand all',
+            collapsed: false, 
+        });
+        lay.addTo(map);
+		document.addEventListener("DOMContentLoaded", function() {
+            // set new Layers List height which considers toggle icon
+            function newLayersListHeight() {
+                var layerScrollbarElement = document.querySelector('.leaflet-control-layers-scrollbar');
+                if (layerScrollbarElement) {
+                    var layersListElement = document.querySelector('.leaflet-control-layers-list');
+                    var originalHeight = layersListElement.style.height 
+                        || window.getComputedStyle(layersListElement).height;
+                    var newHeight = parseFloat(originalHeight) - 50;
+                    layersListElement.style.height = newHeight + 'px';
+                }
+            }
+            var isLayersListExpanded = true;
+            var controlLayersElement = document.querySelector('.leaflet-control-layers');
+            var toggleLayerControl = document.querySelector('.leaflet-control-layers-toggle');
+            // toggle Collapsed/Expanded and apply new Layers List height
+            toggleLayerControl.addEventListener('click', function() {
+                if (isLayersListExpanded) {
+                    controlLayersElement.classList.remove('leaflet-control-layers-expanded');
+                } else {
+                    controlLayersElement.classList.add('leaflet-control-layers-expanded');
+                }
+                isLayersListExpanded = !isLayersListExpanded;
+                newLayersListHeight()
+            });	
+			// apply new Layers List height if toggle layerstree
+			if (controlLayersElement) {
+				controlLayersElement.addEventListener('click', function(event) {
+					var toggleLayerHeaderPointer = event.target.closest('.leaflet-layerstree-header-pointer span');
+					if (toggleLayerHeaderPointer) {
+						newLayersListHeight();
+					}
+				});
+			}
+            // Collapsed/Expanded at Start to apply new height
+            setTimeout(function() {
+                toggleLayerControl.click();
+            }, 10);
+            setTimeout(function() {
+                toggleLayerControl.click();
+            }, 10);
+            // Collapsed touch/small screen
+            var isSmallScreen = window.innerWidth < 650;
+            if (isSmallScreen) {
+                setTimeout(function() {
+                    controlLayersElement.classList.remove('leaflet-control-layers-expanded');
+                    isLayersListExpanded = !isLayersListExpanded;
+                }, 500);
+            }  
+        });       
+        setBounds();
+        map.addControl(new L.Control.Search({
+            layer: cluster_AmentumOfficeLocations_1,
+            initial: false,
+            hideMarkerOnCollapse: true,
+            propertyName: 'Office Address'}));
+        document.getElementsByClassName('search-button')[0].className +=
+         ' fa fa-binoculars';
+// Pie chart functions 
+// Pie chart functions 
+// Shared color palette and sorted country list
+(function() {
+    if (typeof json_AmentumOfficeLocations_1 === 'undefined') return;
+
+    // Count offices per country
+    var countryCounts = {};
+    json_AmentumOfficeLocations_1.features.forEach(function(feature) {
+        var country = feature.properties['Country'];
+        if (country) {
+            countryCounts[country] = (countryCounts[country] || 0) + 1;
+        }
+    });
+
+    // Sort countries alphabetically for consistent color mapping
+    var sortedCountries = Object.keys(countryCounts).sort();
+
+    // Color-blind friendly palette (repeat if needed)
+    var cbColors = [
+        '#377eb8', '#e41a1c', '#4daf4a', '#984ea3', '#ff7f00',
+        '#ffff33', '#a65628', '#f781bf', '#999999', '#66c2a5', '#bdbdbd'
+    ];
+
+    // Map each country to a color
+    var countryColorMap = {};
+    sortedCountries.forEach(function(country, i) {
+        countryColorMap[country] = cbColors[i % cbColors.length];
+    });
+
+    // PIE CHART
+    var pieLabels = sortedCountries;
+    var pieData = pieLabels.map(function(country) { return countryCounts[country]; });
+    var pieColors = pieLabels.map(function(country) { return countryColorMap[country]; });
+
+    var ctx = document.getElementById('countryPieChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'pie',
+        data: {
+            labels: pieLabels,
+            datasets: [{
+                data: pieData,
+                backgroundColor: pieColors
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false },
+                title: {
+                    display: true,
+                    text: 'Office Locations by Country'
+                }
+            },
+            onClick: function(evt, elements, chart) {
+                if (elements && elements.length > 0) {
+                    var idx = elements[0].index;
+                    var selectedLabel = chart.data.labels[idx];
+                    var latlngs = [];
+                    json_AmentumOfficeLocations_1.features.forEach(function(feature) {
+                        if (
+                            feature.properties['Country'] &&
+                            feature.properties['Country'].trim().toLowerCase() === selectedLabel.trim().toLowerCase()
+                        ) {
+                            var coords = feature.geometry.coordinates;
+                            latlngs.push([coords[1], coords[0]]);
+                        }
+                    });
+                    if (latlngs.length === 1) {
+                        map.setView(latlngs[0], 10);
+                    } else if (latlngs.length > 1) {
+                        var bounds = L.latLngBounds(latlngs);
+                        map.fitBounds(bounds, {padding: [50, 50]});
+                    }
+                }
+            }
+        }
+    });
+
+    // Collapsible/reopenable pie chart logic
+    var pieOverlay = document.getElementById('piechartOverlay');
+    var showBtn = document.getElementById('showPieChart');
+    var closeBtn = document.getElementById('togglePieChart');
+    if (pieOverlay && showBtn && closeBtn) {
+        closeBtn.onclick = function() {
+            pieOverlay.style.display = 'none';
+            showBtn.style.display = 'block';
+        };
+        showBtn.onclick = function() {
+            pieOverlay.style.display = 'flex';
+            showBtn.style.display = 'none';
+        };
+    }
+
+    // BAR CHART
+    var barLabels = sortedCountries;
+    var barData = barLabels.map(function(country) { return countryCounts[country]; });
+    var barColors = barLabels.map(function(country) { return countryColorMap[country]; });
+
+    var ctxBar = document.getElementById('countryBarChart').getContext('2d');
+    new Chart(ctxBar, {
+        type: 'bar',
+        data: {
+            labels: barLabels,
+            datasets: [{
+                label: 'Office Count',
+                data: barData,
+                backgroundColor: barColors
+            }]
+        },
+        options: {
+            responsive: false,
+            plugins: {
+                legend: { display: false },
+                title: {
+                    display: true,
+                    text: 'Office Locations by Country'
+                }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        autoSkip: false,
+                        maxRotation: 45,
+                        minRotation: 45,
+                        font: { size: 12 }
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: 'Number of Offices'
+                    }
+                }
+            },
+            onClick: function(evt, elements, chart) {
+                if (elements && elements.length > 0) {
+                    var idx = elements[0].index;
+                    var selectedLabel = chart.data.labels[idx];
+                    var latlngs = [];
+                    json_AmentumOfficeLocations_1.features.forEach(function(feature) {
+                        if (
+                            feature.properties['Country'] &&
+                            feature.properties['Country'].trim().toLowerCase() === selectedLabel.trim().toLowerCase()
+                        ) {
+                            var coords = feature.geometry.coordinates;
+                            latlngs.push([coords[1], coords[0]]);
+                        }
+                    });
+                    if (latlngs.length === 1) {
+                        map.setView(latlngs[0], 10);
+                    } else if (latlngs.length > 1) {
+                        var bounds = L.latLngBounds(latlngs);
+                        map.fitBounds(bounds, {padding: [50, 50]});
+                    }
+                }
+            }
+        }
+    });
+
+    // Collapsible/reopenable bar chart logic
+    var barOverlay = document.getElementById('barchartOverlay');
+    var showBarBtn = document.getElementById('showBarChart');
+    var closeBarBtn = document.getElementById('toggleBarChart');
+    if (barOverlay && showBarBtn && closeBarBtn) {
+        closeBarBtn.onclick = function() {
+            barOverlay.style.display = 'none';
+            showBarBtn.style.display = 'block';
+        };
+        showBarBtn.onclick = function() {
+            barOverlay.style.display = 'flex';
+            showBarBtn.style.display = 'none';
+        };
+    }
+})();
+        </script>
+    </body>
+</html>
